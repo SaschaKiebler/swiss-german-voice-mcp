@@ -32,7 +32,7 @@ No API key, no cloud.
 - Models (about 4.3 GB on disk):
   - **Qwen3-TTS 1.7B Base** as GGUF, e.g. `qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf` from the Hugging Face repo `audio-cpp/audio.cpp-gguf`, or `audiocpp_model_manager install qwen3_tts_1_7b_base_q8_0`. Put the folder at `~/models/audio.cpp/Qwen3-TTS-12Hz-1.7B-Base/`.
   - **Swiss German Whisper** in ggml format: [`Flurin17/whisper-large-v3-turbo-swiss-german`](https://huggingface.co/Flurin17/whisper-large-v3-turbo-swiss-german) converted for whisper.cpp, at `~/models/whisper.cpp/ggml-whisper-large-v3-turbo-swiss-german.bin`. License CC-BY-NC-4.0, so non-commercial use only.
-- At least one reference voice (see below).
+- At least one reference voice. Two ship in [`voices/`](voices), see [Voices](#voices).
 
 Other locations work too, see [Configuration](#configuration).
 
@@ -78,6 +78,26 @@ zh_frau_46000.txt   # the exact words spoken in the clip, in dialect spelling
 ```
 
 Drop in a new pair to add a voice, no restart needed. The clip decides timbre and accent, so a Zurich speaker gives Zurich colouring, a St. Gallen speaker St. Gallen colouring. Only clone voices you have the right to use.
+
+### Bundled voices
+
+The [`voices/`](voices) folder holds the two voices this server was built with, so you can start without recording your own:
+
+| Voice | Dialect | Clip | Transcript |
+| --- | --- | --- | --- |
+| `zh_frau_46000` (default) | Zurich | 6.0 s | S noie Reglement fürd Pflägfinanzierig giltet einheitlich fürd Gmeinde Schoofisse und Üürike. |
+| `sg_frau_sofia_40000` | St. Gallen | 7.3 s | Isch de Chefarzt vo de Gerontologie in Mäls au für dVisite in Büttehart zueständig? |
+
+Copy them to the default location:
+
+```bash
+mkdir -p ~/models/audio.cpp/voices
+cp voices/*.wav voices/*.txt ~/models/audio.cpp/voices/
+```
+
+Or point the server at the repo folder instead, e.g. `claude mcp add swiss-german-voice -e SWISS_VOICE_VOICES_DIR=/absolute/path/to/swiss-german-voice-mcp/voices -- uv --directory ...`.
+
+Both clips are synthetic speech from the FHNW dataset [`i4ds/swiss-german-city-sentences_v2`](https://huggingface.co/datasets/i4ds/swiss-german-city-sentences_v2) (train split, rows 46000 and 40000), 24 kHz mono WAV. The voice names carry the row number. The dataset is published under `license: other`, check its terms before commercial use.
 
 ## Speed
 
@@ -152,3 +172,9 @@ git config core.hooksPath .githooks   # once per clone, see above
 ```
 
 The tests cover voice lookup, output paths, command building, subprocess handling, the warm-server fallback, the Telegram gatekeeping (with a mocked Bot API) and the secret scan, without loading any model or contacting Telegram. The warm server writes its config and log to `$TMPDIR/swiss-german-voice-mcp/`.
+
+## License
+
+The code is under the [MIT License](LICENSE): use it, change it, ship it, sell it, as long as the copyright notice stays in.
+
+Not covered by that license: the clips in [`voices/`](voices), which stay under the terms of their [source dataset](#bundled-voices), and the models you download yourself (the Swiss German Whisper fine-tune is CC-BY-NC-4.0).

@@ -2,6 +2,7 @@
 name = "swiss-german-voice-mcp"
 version = "0.2.0"
 description = "MCP server that speaks Swiss German with a cloned local voice (Qwen3-TTS) and transcribes Swiss German speech (Whisper)."
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.2.0",
