@@ -5,12 +5,19 @@ Tools:
   transcribe_swiss_german  Swiss German speech -> Standard German text (Swiss German Whisper)
   list_swiss_voices        reference voices available for speak_swiss_german
 
-Everything runs locally. See ``engine.py`` for the models, paths and environment variables.
+Optional, only with SWISS_VOICE_TELEGRAM=on:
+  send_swiss_voice_telegram  speak and send the result as a Telegram voice message (see ``telegram.py``)
+
+Everything except the Telegram upload runs locally. See ``engine.py`` for the models, paths and environment
+variables.
 """
 
 from __future__ import annotations
 
+import atexit
 import logging
+import os
+import signal
 import sys
 
 try:  # mcp >= 2
@@ -18,7 +25,7 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP as _Server  # type: ignore[no-redef]
 
-from . import engine
+from . import engine, telegram, warm_server
 
 log = logging.getLogger(__name__)
 
@@ -36,8 +43,8 @@ async def speak_swiss_german(text: str, voice: str = "", output_path: str = "", 
     To translate from Standard German or English, first rewrite the content in Swiss German spelling yourself,
     then call this tool.
 
-    Keep it short. Every call loads the model (about 15 s), then needs roughly 1.5 s per second of audio.
-    A few sentences per call work best.
+    The first call loads the model (about 20 s). After that it stays loaded and a few sentences take 3 to 5 s,
+    until it is unloaded after 15 idle minutes. A few sentences per call work best.
 
     Args:
         text: What to say, in Swiss German spelling.
@@ -53,7 +60,8 @@ async def speak_swiss_german(text: str, voice: str = "", output_path: str = "", 
     except engine.VoiceError as exc:
         return f"Error: {exc}"
     duration = f"{speech.audio_seconds:.1f} s audio" if speech.audio_seconds is not None else "audio"
-    return f"{speech.path}\n{duration}, voice {speech.voice}, generated in {speech.elapsed_seconds:.0f} s."
+    timing = f"generated in {speech.elapsed_seconds:.1f} s via {speech.via}"
+    return f"{speech.path}\n{duration}, voice {speech.voice}, {timing}."
 
 
 @mcp.tool()
@@ -95,10 +103,61 @@ async def list_swiss_voices() -> str:
     return "\n".join(lines)
 
 
+async def send_swiss_voice_telegram(
+    chat_id: str,
+    text: str = "",
+    audio_path: str = "",
+    caption: str = "",
+    reply_to: str = "",
+    voice: str = "",
+    seed: int | None = None,
+) -> str:
+    """Send a Swiss German voice message to a Telegram chat, shown as a real voice bubble with waveform.
+
+    Pass text to speak it first (same rules as speak_swiss_german: write it in Swiss German spelling, keep it to
+    a few sentences), or audio_path to send an existing .ogg. Use this instead of attaching an .ogg to a Telegram
+    reply, which arrives as a file. Only chats on the Telegram plugin's allowlist are accepted.
+
+    Args:
+        chat_id: Telegram chat id, as given in the incoming message.
+        text: What to say, in Swiss German spelling. Leave empty when passing audio_path.
+        audio_path: Existing .ogg/.opus file to send instead of generating speech.
+        caption: Optional text shown under the voice message.
+        reply_to: Optional message id to reply to.
+        voice: Reference voice from list_swiss_voices. Empty uses the default voice.
+        seed: Fix it for a reproducible take.
+
+    Returns the Telegram message id and the local path of the audio.
+    """
+    try:
+        sent = await telegram.speak_and_send(chat_id, text, audio_path, caption, reply_to, voice, seed)
+    except engine.VoiceError as exc:
+        return f"Error: {exc}"
+    duration = f"{sent.audio_seconds:.1f} s" if sent.audio_seconds is not None else "voice message"
+    return f"Sent {duration} to chat {sent.chat_id} as message {sent.message_id} ({sent.via}).\n{sent.path}"
+
+
+if telegram.enabled():
+    mcp.tool()(send_swiss_voice_telegram)
+
+
+def _terminate(signum: int, _frame: object) -> None:
+    # The default SIGTERM/SIGHUP action skips atexit, which would orphan the warm audiocpp_server.
+    warm_server.shutdown()
+    os._exit(128 + signum)
+
+
 def main() -> None:
     # stdout belongs to the MCP protocol, so logs go to stderr.
     logging.basicConfig(level=logging.INFO, stream=sys.stderr, format="%(levelname)s %(name)s: %(message)s")
-    mcp.run()
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # one line per request to the warm server otherwise
+    atexit.register(warm_server.shutdown)
+    signal.signal(signal.SIGTERM, _terminate)
+    signal.signal(signal.SIGHUP, _terminate)
+    try:
+        mcp.run()
+    finally:
+        warm_server.shutdown()
 
 
 if __name__ == "__main__":

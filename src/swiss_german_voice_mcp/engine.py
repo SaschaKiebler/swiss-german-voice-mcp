@@ -1,7 +1,8 @@
 """Local Swiss German speech chain.
 
-Speaking: Qwen3-TTS 1.7B Base clones a reference voice through ``audiocpp_cli`` (audio.cpp, Metal on Apple
-Silicon). The model reads whatever text it gets, so Swiss German spelling yields Swiss German speech.
+Speaking: Qwen3-TTS 1.7B Base clones a reference voice through audio.cpp (Metal on Apple Silicon). The model
+reads whatever text it gets, so Swiss German spelling yields Swiss German speech. Calls go to a warm
+``audiocpp_server`` that keeps the model loaded (see ``warm_server.py``), with ``audiocpp_cli`` as fallback.
 
 Hearing: a Swiss German fine-tune of Whisper large-v3-turbo runs through ``whisper-cli`` (whisper.cpp). It
 understands Swiss German and writes Standard German.
@@ -13,14 +14,20 @@ stdout and a stray line from a child process would corrupt the stream.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 import shutil
 import tempfile
 import time
 import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import warm_server
+
+log = logging.getLogger(__name__)
 
 # Output suffix -> ffmpeg encoder arguments. WAV is written by audio.cpp directly.
 ENCODERS: dict[str, list[str]] = {
@@ -36,7 +43,7 @@ FFMPEG_TIMEOUT = 120.0
 
 # MCP clients such as Claude Desktop start servers with a minimal PATH that misses Homebrew.
 _FALLBACK_BIN_DIRS = ("/opt/homebrew/bin", "/usr/local/bin")
-_NOISE = re.compile(r"ggml_metal|residency|^(family|task|mode|audio_out)=|^metrics\.", re.IGNORECASE)
+_NOISE = re.compile(r"ggml_metal|residency|^(family|task|mode|audio_out)=", re.IGNORECASE)
 
 # One model in GPU memory per kind. Parallel calls queue instead of loading a second 2.7 GB copy.
 _tts_lock = asyncio.Lock()
@@ -166,6 +173,7 @@ class Speech:
     voice: str
     audio_seconds: float | None
     elapsed_seconds: float
+    via: str  # "warm server", or "CLI" plus the reason the warm server was skipped
 
 
 def resolve_output(cfg: Config, requested: str = "") -> tuple[Path, str]:
@@ -195,16 +203,36 @@ def tts_command(cli: str, cfg: Config, voice: Voice, text: str, wav_out: Path, s
         "--text", text,
         "--language", cfg.tts_language,
         "--out", str(wav_out),
-        "--metrics",
     ]  # fmt: skip
     if seed is not None:
         cmd += ["--seed", str(seed)]
     return cmd
 
 
-def parse_metrics(stdout: str) -> dict[str, str]:
-    """``metrics.audio_duration_ms=2800`` lines from ``audiocpp_cli --metrics`` as a dict."""
-    return {m[1]: m[2] for m in re.finditer(r"^metrics\.([\w.]+)=(\S+)\s*$", stdout, re.MULTILINE)}
+def wav_seconds(path: Path) -> float | None:
+    try:
+        with wave.open(str(path), "rb") as wav:
+            return wav.getnframes() / wav.getframerate()
+    except (wave.Error, OSError, EOFError, ZeroDivisionError):
+        return None
+
+
+async def _generate(cfg: Config, voice: Voice, text: str, wav: Path, seed: int | None) -> str:
+    """Write ``text`` as speech to ``wav``. Warm server first, CLI as fallback. Returns which path was taken."""
+    via = "CLI"
+    if warm_server.enabled():
+        try:
+            server_bin = find_binary("audiocpp_server", "AUDIOCPP_SERVER")
+            await warm_server.synthesize(cfg, server_bin, voice, text, wav, TTS_TIMEOUT, seed)
+            return "warm server"
+        except (warm_server.WarmServerError, VoiceError) as exc:
+            log.warning("warm server unavailable, falling back to the CLI: %s", exc)
+            via = f"CLI, warm server unavailable: {str(exc).splitlines()[0][:200]}"
+    cli = find_binary("audiocpp_cli", "AUDIOCPP_CLI")
+    stdout = await run(tts_command(cli, cfg, voice, text, wav, seed), TTS_TIMEOUT)
+    if not wav.is_file():
+        raise VoiceError(f"audiocpp_cli finished but wrote no audio:\n{_tail(stdout.encode())}")
+    return via
 
 
 async def synthesize(text: str, voice: str = "", output_path: str = "", seed: int | None = None) -> Speech:
@@ -216,7 +244,6 @@ async def synthesize(text: str, voice: str = "", output_path: str = "", seed: in
         raise VoiceError(f"TTS model not found at {cfg.tts_model}. Set SWISS_VOICE_TTS_MODEL.")
     ref = get_voice(cfg, voice)
     out, fmt = resolve_output(cfg, output_path)
-    cli = find_binary("audiocpp_cli", "AUDIOCPP_CLI")
     ffmpeg = find_binary("ffmpeg", "FFMPEG") if fmt != "wav" else ""
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -224,18 +251,17 @@ async def synthesize(text: str, voice: str = "", output_path: str = "", seed: in
     with tempfile.TemporaryDirectory(prefix="swiss-voice-") as tmp:
         wav = out if fmt == "wav" else Path(tmp) / "speech.wav"
         async with _tts_lock:
-            stdout = await run(tts_command(cli, cfg, ref, text, wav, seed), TTS_TIMEOUT)
-        if not wav.is_file():
-            raise VoiceError(f"audiocpp_cli finished but wrote no audio:\n{_tail(stdout.encode())}")
+            via = await _generate(cfg, ref, text, wav, seed)
+        audio_seconds = wav_seconds(wav)
         if fmt != "wav":
             await run([ffmpeg, "-y", "-loglevel", "error", "-i", str(wav), *ENCODERS[fmt], str(out)], FFMPEG_TIMEOUT)
 
-    duration_ms = parse_metrics(stdout).get("audio_duration_ms")
     return Speech(
         path=out,
         voice=ref.name,
-        audio_seconds=float(duration_ms) / 1000 if duration_ms else None,
+        audio_seconds=audio_seconds,
         elapsed_seconds=time.monotonic() - started,
+        via=via,
     )
 
 

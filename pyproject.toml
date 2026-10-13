@@ -1,10 +1,11 @@
 [project]
 name = "swiss-german-voice-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server that speaks Swiss German with a cloned local voice (Qwen3-TTS) and transcribes Swiss German speech (Whisper)."
 requires-python = ">=3.10"
 dependencies = [
     "mcp>=1.2.0",
+    "httpx>=0.27",
 ]
 
 [project.scripts]

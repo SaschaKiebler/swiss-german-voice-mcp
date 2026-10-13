@@ -16,6 +16,7 @@ No API key, no cloud.
 | `speak_swiss_german` | Text in Swiss German spelling → `.ogg` (Opus, fits Telegram voice notes), `.mp3` or `.wav`. Optional voice and seed. |
 | `transcribe_swiss_german` | Any audio file ffmpeg can read → Standard German transcript. |
 | `list_swiss_voices` | Reference voices available for cloning, with their transcripts. |
+| `send_swiss_voice_telegram` | Optional, see [Telegram extension](#telegram-extension-optional). Speaks text and sends it as a real Telegram voice message. |
 
 ## Requirements
 
@@ -65,7 +66,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 }
 ```
 
-Claude Desktop starts servers with a minimal `PATH`. The server falls back to `/opt/homebrew/bin` and `/usr/local/bin` for `audiocpp_cli`, `whisper-cli` and `ffmpeg`, so Homebrew installs are found without extra config. If `uv` itself is not found, use its absolute path as `command`.
+Claude Desktop starts servers with a minimal `PATH`. The server falls back to `/opt/homebrew/bin` and `/usr/local/bin` for `audiocpp_cli`, `audiocpp_server`, `whisper-cli` and `ffmpeg`, so Homebrew installs are found without extra config. If `uv` itself is not found, use its absolute path as `command`.
 
 ## Voices
 
@@ -80,7 +81,44 @@ Drop in a new pair to add a voice, no restart needed. The clip decides timbre an
 
 ## Speed
 
-Every `speak_swiss_german` call loads the model from scratch (about 15 s on an M1 Pro), then generates at roughly 1.5 s of compute per second of audio. A three-sentence message takes 20 to 30 s. Calls are serialized, so parallel requests queue instead of loading a second copy into GPU memory. Transcription takes 2 to 3 s per clip.
+Loading the 2.7 GB TTS model takes about 15 s, generating a few sentences only 2 to 5 s. So the server keeps the model warm:
+
+- The first `speak_swiss_german` call starts an `audiocpp_server` child process on `127.0.0.1:18765`, which loads the model. That call takes about 20 s.
+- Every following call goes to the loaded model and takes about as long as the audio itself (measured on an M1 Pro: 2.7 s for 2.9 s of audio).
+- After 15 minutes without a call the server drops the model again (about 3.5 GB of RAM) and reloads it on the next call.
+- The child process is terminated when the MCP server exits. A second MCP server instance, e.g. another Claude session, reuses a running one instead of loading a second copy.
+- If the warm server cannot start or fails, the call falls back to `audiocpp_cli`, which loads the model per call (about 20 s). The tool result says which path was used.
+
+Calls within one MCP server are serialized. Transcription needs 2 to 3 s per clip and loads its model per call, which is fast enough that it needs no warm mode.
+
+## Telegram extension (optional)
+
+Off by default. Set `SWISS_VOICE_TELEGRAM=on` and the server registers one more tool, `send_swiss_voice_telegram(chat_id, text | audio_path, caption, reply_to, voice, seed)`.
+
+It exists because the [Claude Code Telegram plugin](https://github.com/anthropics/claude-plugins-official) sends an `.ogg` as a document, a file the recipient has to download. Telegram shows a voice bubble with waveform and inline playback only for the Bot API method `sendVoice`, which this tool calls. Incoming voice messages need no extension: download them with the plugin and pass the path to `transcribe_swiss_german`.
+
+```bash
+claude mcp add -s user swiss-german-voice -e SWISS_VOICE_TELEGRAM=on -- uv --directory /absolute/path/to/swiss-german-voice-mcp run swiss-german-voice-mcp
+```
+
+How the bot token and the recipients are handled:
+
+- **Token.** Read at call time from `TELEGRAM_BOT_TOKEN`, or else from the Telegram plugin's state file `~/.claude/channels/telegram/.env` (respects `TELEGRAM_STATE_DIR` and `CLAUDE_CONFIG_DIR`). If the plugin is set up, no extra configuration is needed and the token exists in exactly one place. It is never written to disk, never logged (httpx request logging is turned down because Bot API URLs contain the token) and redacted from every error message.
+- **Recipients.** Only chats on the plugin's allowlist (`access.json`, `allowFrom` plus `groups`) are accepted, the same gate the plugin applies to its own replies. Without the plugin, list chat ids in `SWISS_VOICE_TELEGRAM_ALLOWED_CHATS`.
+- **Files.** `audio_path` must be `.ogg`, `.oga` or `.opus`, and nothing from the plugin's state directory except its `inbox/` is sent.
+
+## Keeping secrets out of git
+
+The code never contains credentials, and three layers make sure none slip in by accident:
+
+1. `.gitignore` excludes `.env`, `*.env`, `*.pem`, `*.key` and `secrets/`.
+2. A pre-commit hook runs `scripts/check_secrets.py` on the staged content and refuses the commit if it finds a secret file, a token shape (Telegram, Anthropic/OpenAI, GitHub, Hugging Face, AWS, private keys) or, verbatim, the bot token configured on this machine. Findings name the file, never the value. Enable it once per clone:
+
+   ```bash
+   git config core.hooksPath .githooks
+   ```
+
+3. `tests/test_no_secrets.py` runs the same scan over every file git would pick up, so `uv run pytest` fails as well.
 
 ## Configuration
 
@@ -97,13 +135,20 @@ All optional, set as environment variables (in Claude Desktop via an `"env"` blo
 | `SWISS_VOICE_ASR_LANGUAGE` | `de` |
 | `SWISS_VOICE_OUTPUT_DIR` | `$TMPDIR/swiss-german-voice` |
 | `SWISS_VOICE_TTS_TIMEOUT` / `SWISS_VOICE_ASR_TIMEOUT` | `900` / `300` seconds |
-| `AUDIOCPP_CLI`, `WHISPER_CLI`, `FFMPEG` | looked up on `PATH`, then Homebrew dirs |
+| `SWISS_VOICE_WARM` | `on` (`off` always uses the CLI) |
+| `SWISS_VOICE_SERVER_PORT` | `18765` |
+| `SWISS_VOICE_IDLE_UNLOAD_MIN` | `15` |
+| `SWISS_VOICE_TELEGRAM` | `off` (`on` registers `send_swiss_voice_telegram`) |
+| `SWISS_VOICE_TELEGRAM_ALLOWED_CHATS` | the plugin's `access.json` allowlist |
+| `TELEGRAM_BOT_TOKEN` | read from the plugin's `.env` |
+| `AUDIOCPP_CLI`, `AUDIOCPP_SERVER`, `WHISPER_CLI`, `FFMPEG` | looked up on `PATH`, then Homebrew dirs |
 
 ## Development
 
 ```bash
 uv run pytest
 uvx ruff check . && uvx ruff format --check .
+git config core.hooksPath .githooks   # once per clone, see above
 ```
 
-The tests cover voice lookup, output paths, command building and subprocess handling without loading any model.
+The tests cover voice lookup, output paths, command building, subprocess handling, the warm-server fallback, the Telegram gatekeeping (with a mocked Bot API) and the secret scan, without loading any model or contacting Telegram. The warm server writes its config and log to `$TMPDIR/swiss-german-voice-mcp/`.

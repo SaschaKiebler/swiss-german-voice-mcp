@@ -1,3 +1,14 @@
+# Secrets: never commit. Tokens are read at runtime from the environment or the Telegram plugin's
+# state dir (~/.claude/channels/telegram/.env), see src/swiss_german_voice_mcp/telegram.py.
+.env
+.env.*
+!.env.example
+*.env
+*.pem
+*.key
+secrets/
+.claude/settings.local.json
+
 # Python
 __pycache__/
 *.py[cod]

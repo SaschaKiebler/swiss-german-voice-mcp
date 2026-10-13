@@ -1,4 +1,5 @@
 import os
+import wave
 from pathlib import Path
 
 import pytest
@@ -56,12 +57,19 @@ def test_tts_command(cfg):
     assert cmd[cmd.index("--reference-text") + 1] == "Grüezi mitenand."
     assert cmd[cmd.index("--voice-ref") + 1] == str(voice.wav)
     assert cmd[-2:] == ["--seed", "7"]
+    assert "--metrics" not in cmd
     assert "--seed" not in engine.tts_command("audiocpp_cli", cfg, voice, "x", Path("/x/out.wav"))
 
 
-def test_parse_metrics():
-    stdout = "family=qwen3_tts\naudio_out=a.wav\nmetrics.wall_ms=4270.34\nmetrics.audio_duration_ms=2800\n"
-    assert engine.parse_metrics(stdout) == {"wall_ms": "4270.34", "audio_duration_ms": "2800"}
+def test_wav_seconds(tmp_path):
+    path = tmp_path / "a.wav"
+    with wave.open(str(path), "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(24000)
+        wav.writeframes(b"\0\0" * 36000)
+    assert engine.wav_seconds(path) == 1.5
+    assert engine.wav_seconds(tmp_path / "missing.wav") is None
 
 
 def test_clean_transcript():
