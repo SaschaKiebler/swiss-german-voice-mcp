@@ -2,9 +2,11 @@
 
 ## Ballade vom Computer us Züri
 
-🔊 [ballade-vom-computer-us-zueri.mp3](ballade-vom-computer-us-zueri.mp3) (75 s, voice `zh_frau_46000`)
+A computer explains, in Zurich dialect, how this repo works. 75 s, voice `zh_frau_46000`. GitHub starts videos muted, so turn the sound on in the player.
 
-A computer explains, in Zurich dialect, how this repo works.
+https://github.com/user-attachments/assets/33e415e5-5e36-4c81-aa52-4144c22cd0f8
+
+Audio only: [ballade-vom-computer-us-zueri.mp3](ballade-vom-computer-us-zueri.mp3)
 
 > Grüezi mitenand, ich bin en Computer,
 > ich han kei eigeti Stimm und kei Muetter.
@@ -83,13 +85,16 @@ Six `speak_swiss_german` calls, one per stanza, since a few sentences per call g
 }
 ```
 
-Every take was checked with `transcribe_swiss_german`, then the six WAVs were joined with 0.8 s pauses:
+Every take was checked with `transcribe_swiss_german`, then the six WAVs were joined with 0.8 s pauses and raised to -16 LUFS, since the raw takes come out quiet (around -30 LUFS):
 
 ```bash
 ffmpeg -i 1.wav -i 2.wav -i 3.wav -i 4.wav -i 5.wav -i 6.wav -f lavfi -t 0.8 -i anullsrc=r=24000:cl=mono \
   -filter_complex "[6]asplit=5[g1][g2][g3][g4][g5];[0][g1][1][g2][2][g3][3][g4][4][g5][5]concat=n=11:v=0:a=1" \
-  -c:a libmp3lame -q:a 3 ballade-vom-computer-us-zueri.mp3
+  full.wav
+ffmpeg -i full.wav -af loudnorm=I=-16:TP=-1.5:LRA=11 -c:a libmp3lame -q:a 3 ballade-vom-computer-us-zueri.mp3
 ```
+
+For the video, each stanza became a slide, and ffmpeg's `showwavespic` drew the waveform that fills up during playback.
 
 What we learned on the way:
 

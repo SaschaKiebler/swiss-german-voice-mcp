@@ -9,7 +9,9 @@ There is no Swiss German TTS model. The trick is voice cloning from a Swiss refe
 
 No API key, no cloud.
 
-🔊 **Hear it:** [*Ballade vom Computer us Züri*](examples/), a 75-second poem about this repo, spoken by the server itself.
+🔊 **Hear it:** *Ballade vom Computer us Züri*, a poem about this repo, spoken by the server itself. GitHub starts videos muted, so turn the sound on in the player. Text, translation and how it was made: [examples/](examples/).
+
+https://github.com/user-attachments/assets/33e415e5-5e36-4c81-aa52-4144c22cd0f8
 
 ## Tools
 
