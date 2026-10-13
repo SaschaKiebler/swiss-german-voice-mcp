@@ -1,0 +1,32 @@
+[project]
+name = "swiss-german-voice-mcp"
+version = "0.1.0"
+description = "MCP server that speaks Swiss German with a cloned local voice (Qwen3-TTS) and transcribes Swiss German speech (Whisper)."
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.0",
+]
+
+[project.scripts]
+swiss-german-voice-mcp = "swiss_german_voice_mcp.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swiss_german_voice_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
